@@ -1,0 +1,16 @@
+﻿# Normaliza arquivos de texto no repositório
+* text=auto
+
+# Código e arquivos executados em ambientes Linux
+*.py text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.csv text eol=lf
+*.ipynb text eol=lf
+
+# Scripts PowerShell podem permanecer com CRLF
+*.ps1 text eol=crlf
