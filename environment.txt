@@ -1,0 +1,11 @@
+Reference environment for v1-engineering
+
+Python: Python 3.12.3
+Platform: WSL2 / Linux
+
+Main packages:
+scikit-learn: 1.9.1
+pandas:       3.0.6
+numpy:        2.5.3
+joblib:       1.6.0
+scipy:        1.18.1
