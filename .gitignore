@@ -2,3 +2,9 @@
 __pycache__/
 .ipynb_checkpoints/
 .DS_Store
+
+# Python packaging / testing
+.pytest_cache/
+*.egg-info/
+build/
+dist/
