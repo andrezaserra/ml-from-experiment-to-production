@@ -1,7 +1,7 @@
-﻿# Normaliza arquivos de texto no repositório
+# Normaliza arquivos de texto no repositorio
 * text=auto
 
-# Código e arquivos executados em ambientes Linux
+# Codigo e arquivos executados em ambientes Linux
 *.py text eol=lf
 *.sh text eol=lf
 *.yml text eol=lf
