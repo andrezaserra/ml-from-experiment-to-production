@@ -16,6 +16,10 @@ Na `v2-mlflow`, surge um novo problema:
 
 > **“Como rastrear sistematicamente cada treinamento, seus parâmetros, métricas, artefatos e modelos?”**
 
+E, depois de acumular vários experimentos:
+
+> **“Qual desses modelos deve entrar no ciclo de vida gerenciado da aplicação?”**
+
 ## Estrutura
 
 ```text
@@ -34,6 +38,7 @@ ml-from-experiment-to-production/
 │       ├── data.py
 │       ├── evaluate.py
 │       ├── inference.py
+│       ├── register.py
 │       ├── tracking.py
 │       └── train.py
 ├── tests/
@@ -76,7 +81,7 @@ MLflow Run
 
 Cada execução passa a ter identidade própria e pode ser consultada posteriormente.
 
-## Conceitos principais
+## Experiment Tracking
 
 ### Experiment
 
@@ -232,7 +237,7 @@ Recall:     0.9021
 
 Os valores podem variar de acordo com os hiperparâmetros utilizados.
 
-O objetivo não é escolher o melhor modelo, mas demonstrar como o MLflow permite comparar diferentes execuções de forma estruturada.
+O objetivo não é escolher automaticamente o melhor modelo, mas demonstrar como o MLflow permite comparar diferentes execuções de forma estruturada.
 
 ## Um run também pode falhar
 
@@ -246,31 +251,134 @@ Isso ilustra uma característica importante:
 
 Runs com falha também ajudam a preservar o histórico do desenvolvimento.
 
-## Tracking não é deployment
+## Model Registry
 
-Na `v1`, o arquivo:
+Depois que vários experimentos foram registrados, surge uma nova necessidade:
 
-```text
-models/model.pkl
-```
+> **Nem todo modelo treinado deve automaticamente ser utilizado pela aplicação.**
 
-representava o modelo local de referência.
+Por isso, a `v2` também introduz o **MLflow Model Registry**.
 
-Na `v2`, novos experimentos são registrados no MLflow, mas não substituem automaticamente esse modelo.
+O fluxo passa a ser:
 
 ```text
-treinamento experimental
+Experiment Tracking
         ↓
-      MLflow
+vários runs
         ↓
-novo modelo registrado
-
-models/model.pkl
+modelo selecionado
         ↓
-modelo de referência permanece inalterado
+Logged Model
+        ↓
+Model Registry
+        ↓
+Registered Model
+        ↓
+Model Version
+        ↓
+alias
 ```
 
-Isso reforça uma distinção importante:
+Neste projeto, o modelo registrado recebe o nome:
+
+```text
+satellite-anomaly-classifier
+```
+
+## Registrando um modelo
+
+O módulo:
+
+```text
+src/satellite_ml/register.py
+```
+
+é responsável por promover um modelo produzido por um run para o Model Registry.
+
+Exemplo:
+
+```bash
+python -m satellite_ml.register \
+  --run-id SEU_RUN_ID
+```
+
+O script encontra o **Logged Model** produzido pelo run e cria uma nova versão no Registry.
+
+Exemplo conceitual:
+
+```text
+rf-baseline
+    ↓
+Logged Model
+    ↓
+satellite-anomaly-classifier
+    ↓
+Version 1
+```
+
+## Alias `champion`
+
+A versão registrada recebe o alias:
+
+```text
+champion
+```
+
+Assim, uma aplicação não precisa saber qual número de versão deve carregar.
+
+Em vez de:
+
+```text
+Version 1
+Version 2
+Version 7
+```
+
+ela pode referenciar:
+
+```text
+models:/satellite-anomaly-classifier@champion
+```
+
+O Registry resolve qual versão corresponde ao alias.
+
+## Carregando o modelo registrado
+
+Exemplo:
+
+```python
+import mlflow
+
+mlflow.set_tracking_uri(
+    "http://127.0.0.1:5000"
+)
+
+model = mlflow.sklearn.load_model(
+    "models:/satellite-anomaly-classifier@champion"
+)
+```
+
+Neste projeto, esse carregamento foi validado com sucesso utilizando um `RandomForestClassifier`.
+
+## Tracking não é Registry
+
+Esses dois conceitos resolvem problemas diferentes.
+
+```text
+Experiment Tracking
+    ↓
+“O que aconteceu nos meus experimentos?”
+
+Model Registry
+    ↓
+“Quais modelos entraram no ciclo de vida gerenciado?”
+```
+
+Nem todo run precisa gerar uma versão registrada.
+
+## Registry não é deployment
+
+Registrar um modelo também não significa colocá-lo automaticamente em produção.
 
 ```text
 Training
@@ -279,14 +387,34 @@ gera um modelo
 
 Tracking
     ↓
-registra o que aconteceu
+registra o experimento
 
-Promotion / Deployment
+Registry
     ↓
-decide qual modelo será utilizado
+gerencia versões e aliases
+
+Deployment / Serving
+    ↓
+expõe o modelo para uso
 ```
 
-Executar um novo experimento não significa automaticamente colocar aquele modelo em produção.
+Essa separação será importante na próxima etapa.
+
+## Modelo local de referência
+
+O arquivo:
+
+```text
+models/model.pkl
+```
+
+continua representando o modelo local de referência da `v1`.
+
+Os novos treinamentos experimentais da `v2` são registrados no MLflow e não sobrescrevem automaticamente esse artefato.
+
+Isso reforça a ideia de que:
+
+> **Treinar um novo modelo não significa automaticamente promover esse modelo para uso pela aplicação.**
 
 ## Testes
 
@@ -314,13 +442,20 @@ O `environment.txt` registra as principais versões, incluindo o MLflow.
 
 ## Por que esta versão ainda é incompleta?
 
-Agora conseguimos rastrear experimentos, comparar configurações e preservar métricas, artefatos e modelos associados a cada execução.
+Agora conseguimos:
+
+- rastrear experimentos;
+- comparar parâmetros e métricas;
+- preservar artefatos e modelos;
+- registrar modelos selecionados;
+- gerenciar versões;
+- utilizar aliases como `champion`.
 
 Mas ainda existem novas perguntas:
 
 1. Como outro sistema pode enviar dados e obter uma predição?
 2. Como expor a inferência por uma interface padronizada?
 3. Como validar os dados recebidos antes de enviá-los ao modelo?
-4. Como desacoplar o código cliente da implementação interna do Machine Learning?
+4. Como fazer uma aplicação consumir o modelo definido como `champion` no Registry?
 
 Na próxima versão, essas perguntas motivarão a criação de uma **API com FastAPI**.
