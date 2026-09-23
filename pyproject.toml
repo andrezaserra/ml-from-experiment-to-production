@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "jupyter>=1.0",
+    "mlflow>=3.0",
     "matplotlib>=3.8",
     "pytest>=8.0",
 ]

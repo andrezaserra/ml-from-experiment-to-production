@@ -1,30 +1,20 @@
-# Do experimento à produção — v1
+# Do experimento à produção — v2
 
-Segundo estágio do projeto demonstrativo do minicurso.
+Terceiro estágio do projeto demonstrativo do minicurso.
 
 ## Cenário
 
 O projeto usa uma telemetria **100% sintética** para demonstrar um problema simples de classificação de anomalias. Nenhum valor deve ser interpretado como limite operacional de um satélite real.
 
-Na versão inicial (`v0-experiment`), praticamente toda a lógica de Machine Learning estava concentrada em um notebook:
-
-```text
-data/telemetry.csv
-        ↓
-notebooks/00_experiment.ipynb
-        ↓
-models/model.pkl
-```
+Na `v1-engineering`, o experimento foi reorganizado como um pequeno projeto Python, com módulos reutilizáveis, testes e ambiente de execução mais explícito.
 
 A pergunta daquela versão era:
 
-> **“Consigo treinar um modelo que funcione?”**
-
-Na `v1-engineering`, o mesmo experimento começa a ser tratado como um projeto de software.
-
-A nova pergunta é:
-
 > **“Consigo organizar, reutilizar, testar e reproduzir melhor esse projeto?”**
+
+Na `v2-mlflow`, surge um novo problema:
+
+> **“Como rastrear sistematicamente cada treinamento, seus parâmetros, métricas, artefatos e modelos?”**
 
 ## Estrutura
 
@@ -44,11 +34,11 @@ ml-from-experiment-to-production/
 │       ├── data.py
 │       ├── evaluate.py
 │       ├── inference.py
+│       ├── tracking.py
 │       └── train.py
 ├── tests/
 │   ├── test_data.py
 │   └── test_inference.py
-├── generate_data.py
 ├── environment.txt
 ├── pyproject.toml
 ├── requirements.lock.txt
@@ -56,101 +46,255 @@ ml-from-experiment-to-production/
 └── README.md
 ```
 
-## O que mudou em relação à v0?
+Os arquivos locais do MLflow, como `mlflow.db` e `mlartifacts/`, não são versionados no Git.
 
-O notebook continua disponível para exploração e experimentação, mas a lógica reutilizável passa a ser organizada em módulos Python.
+## O que mudou em relação à v1?
+
+Na `v1`, cada treinamento produzia arquivos locais:
 
 ```text
-config.py
-    ↓
-configurações compartilhadas
-
-data.py
-    ↓
-leitura e preparação dos dados
-
-train.py
-    ↓
 treinamento
-
-evaluate.py
     ↓
-avaliação
-
-inference.py
-    ↓
-inferência reutilizável
-
-tests/
-    ↓
-validação automatizada
+model.pkl
+metrics.json
 ```
 
-O treinamento deixa de depender da execução manual das células do notebook e pode ser executado diretamente:
+Isso funciona, mas não preserva de forma estruturada o contexto de cada execução.
+
+Na `v2`, cada treinamento cria um **run** no MLflow:
+
+```text
+treinamento
+    ↓
+MLflow Run
+    ├── parâmetros
+    ├── métricas
+    ├── tags
+    ├── artefatos
+    └── modelo
+```
+
+Cada execução passa a ter identidade própria e pode ser consultada posteriormente.
+
+## Conceitos principais
+
+### Experiment
+
+Agrupa diferentes execuções relacionadas ao mesmo problema.
+
+Neste projeto:
+
+```text
+satellite-anomaly-detection
+```
+
+### Run
+
+Representa uma execução individual do treinamento.
+
+Exemplos:
+
+```text
+rf-small
+rf-baseline
+rf-large
+validation-v2
+```
+
+### Parameters
+
+Descrevem como o modelo foi configurado antes do treinamento.
+
+Exemplos:
+
+```text
+n_estimators
+max_depth
+class_weight
+random_state
+```
+
+### Metrics
+
+Representam os resultados medidos após o treinamento.
+
+Neste projeto:
+
+```text
+f1
+precision
+recall
+```
+
+### Artifacts
+
+São arquivos ou objetos produzidos por uma execução.
+
+Exemplos:
+
+```text
+metrics.json
+modelo treinado
+assinatura do modelo
+exemplo de entrada
+```
+
+## Tracking
+
+A configuração do MLflow foi separada em:
+
+```text
+src/satellite_ml/tracking.py
+```
+
+Esse módulo define onde o tracking é realizado e qual experimento será utilizado.
+
+Por padrão, o projeto espera um MLflow Tracking Server em:
+
+```text
+http://127.0.0.1:5000
+```
+
+A URI pode ser alterada por meio da variável de ambiente:
 
 ```bash
-python -m satellite_ml.train
+export MLFLOW_TRACKING_URI=http://outro-servidor:5000
 ```
 
-A inferência também passa a existir como uma função reutilizável:
+## Executando o MLflow
 
-```python
-from satellite_ml.inference import predict_one
+Ative o ambiente virtual:
 
-telemetry = {
-    "battery_voltage": 28.1,
-    "battery_current": 1.7,
-    "battery_temperature": 24.8,
-    "solar_panel_current": 4.9,
-    "bus_voltage": 28.0,
-    "attitude_error": 0.02,
-    "eclipse": 0,
-}
-
-prediction = predict_one(telemetry)
+```bash
+source .venv/bin/activate
 ```
 
-Essa separação será importante nas próximas versões, quando a mesma lógica de inferência passar a ser utilizada por uma API.
+Inicie o servidor:
+
+```bash
+mlflow server
+```
+
+A interface estará disponível em:
+
+```text
+http://127.0.0.1:5000
+```
+
+## Executando experimentos
+
+Um treinamento com os parâmetros padrão:
+
+```bash
+python -m satellite_ml.train \
+  --run-name baseline-v2
+```
+
+Um modelo menor:
+
+```bash
+python -m satellite_ml.train \
+  --n-estimators 100 \
+  --max-depth 6 \
+  --run-name rf-small
+```
+
+Um modelo intermediário:
+
+```bash
+python -m satellite_ml.train \
+  --n-estimators 200 \
+  --max-depth 10 \
+  --run-name rf-baseline
+```
+
+Um modelo maior:
+
+```bash
+python -m satellite_ml.train \
+  --n-estimators 300 \
+  --max-depth 14 \
+  --run-name rf-large
+```
+
+Cada comando gera um novo run no experimento `satellite-anomaly-detection`.
 
 ## Resultado de referência
 
-No ambiente de referência da `v1-engineering`, o modelo produz aproximadamente:
-
-- **F1:** 0.942
-- **Precision:** 0.985
-- **Recall:** 0.902
-
-O desempenho alto é intencional: o objetivo não é construir um benchmark científico de detecção de anomalias, mas ter um experimento simples e estável sobre o qual adicionaremos as camadas de engenharia.
-
-## Reprodutibilidade
-
-A `v1` também começa a tornar o ambiente de execução mais explícito.
-
-O `pyproject.toml` declara as dependências do projeto:
+Um exemplo de execução da `v2`:
 
 ```text
-Quais bibliotecas o projeto precisa?
+Run:        validation-v2
+F1:         0.9382
+Precision:  0.9773
+Recall:     0.9021
 ```
 
-O `requirements.lock.txt` registra as versões exatas instaladas no ambiente de referência:
+Os valores podem variar de acordo com os hiperparâmetros utilizados.
+
+O objetivo não é escolher o melhor modelo, mas demonstrar como o MLflow permite comparar diferentes execuções de forma estruturada.
+
+## Um run também pode falhar
+
+Durante o desenvolvimento da `v2`, uma primeira tentativa de registrar o modelo falhou durante a serialização.
+
+Esse run permaneceu registrado no MLflow com status de falha.
+
+Isso ilustra uma característica importante:
+
+> **Experiment tracking registra o processo experimental, e não apenas os resultados bem-sucedidos.**
+
+Runs com falha também ajudam a preservar o histórico do desenvolvimento.
+
+## Tracking não é deployment
+
+Na `v1`, o arquivo:
 
 ```text
-Quais versões estavam instaladas quando o projeto foi executado?
+models/model.pkl
 ```
 
-O `environment.txt` registra as principais versões utilizadas nesta etapa.
+representava o modelo local de referência.
 
-Durante a evolução entre `v0` e `v1`, o mesmo código de Machine Learning foi executado em ambientes com versões diferentes das bibliotecas e apresentou uma pequena variação nas métricas.
+Na `v2`, novos experimentos são registrados no MLflow, mas não substituem automaticamente esse modelo.
 
-Isso ilustra uma ideia importante:
+```text
+treinamento experimental
+        ↓
+      MLflow
+        ↓
+novo modelo registrado
 
-> **Reprodutibilidade envolve código, dados e ambiente.**
+models/model.pkl
+        ↓
+modelo de referência permanece inalterado
+```
 
-Controlar apenas uma seed ou `random_state` não é suficiente para garantir resultados idênticos entre ambientes diferentes.
+Isso reforça uma distinção importante:
+
+```text
+Training
+    ↓
+gera um modelo
+
+Tracking
+    ↓
+registra o que aconteceu
+
+Promotion / Deployment
+    ↓
+decide qual modelo será utilizado
+```
+
+Executar um novo experimento não significa automaticamente colocar aquele modelo em produção.
 
 ## Testes
 
-A `v1` também introduz testes automatizados.
+Os testes introduzidos na `v1` continuam válidos:
+
+```bash
+pytest -v
+```
 
 Atualmente são verificados:
 
@@ -158,67 +302,25 @@ Atualmente são verificados:
 - criação dos conjuntos de treino e teste;
 - retorno válido da função de inferência.
 
-Para executar:
+## Reprodutibilidade
 
-```bash
-pytest -v
-```
+A `v2` atualiza também o ambiente de referência.
 
-Os testes não verificam se o modelo é cientificamente adequado. Eles verificam comportamentos esperados do software.
+O `pyproject.toml` passa a incluir o MLflow como dependência do projeto.
 
-## Executando
+O `requirements.lock.txt` registra as versões exatas instaladas no ambiente utilizado para esta etapa.
 
-Crie um ambiente Python e instale as dependências:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-
-pip install -e ".[dev]"
-```
-
-Treine o modelo:
-
-```bash
-python -m satellite_ml.train
-```
-
-Execute os testes:
-
-```bash
-pytest -v
-```
-
-Para regenerar os dados:
-
-```bash
-python generate_data.py
-```
-
-## Voltando para a versão anterior
-
-O experimento inicial está preservado pela tag:
-
-```bash
-git checkout v0-experiment
-```
-
-Para retornar à linha principal do projeto:
-
-```bash
-git switch main
-```
+O `environment.txt` registra as principais versões, incluindo o MLflow.
 
 ## Por que esta versão ainda é incompleta?
 
-Agora o projeto está melhor organizado, possui módulos reutilizáveis, testes e informações sobre o ambiente de execução.
+Agora conseguimos rastrear experimentos, comparar configurações e preservar métricas, artefatos e modelos associados a cada execução.
 
-Mas novas perguntas aparecem:
+Mas ainda existem novas perguntas:
 
-1. Como registrar automaticamente cada treinamento realizado?
-2. Quais hiperparâmetros produziram determinado resultado?
-3. Como comparar diferentes execuções do experimento?
-4. Como associar métricas, parâmetros e artefatos ao modelo produzido?
-5. Como saber qual modelo deve seguir para a próxima etapa?
+1. Como outro sistema pode enviar dados e obter uma predição?
+2. Como expor a inferência por uma interface padronizada?
+3. Como validar os dados recebidos antes de enviá-los ao modelo?
+4. Como desacoplar o código cliente da implementação interna do Machine Learning?
 
-Na próxima versão, essas perguntas motivarão a introdução do **MLflow** para rastreamento de experimentos e modelos.
+Na próxima versão, essas perguntas motivarão a criação de uma **API com FastAPI**.
