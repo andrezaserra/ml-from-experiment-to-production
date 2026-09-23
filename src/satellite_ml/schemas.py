@@ -34,7 +34,8 @@ class PredictionResponse(BaseModel):
     anomaly: bool
     prediction: int
     model: str
-    alias: str
+    version: str
+    source_alias: str | None = None
 
 
 class HealthResponse(BaseModel):

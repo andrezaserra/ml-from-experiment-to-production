@@ -13,3 +13,5 @@ dist/
 mlflow.db
 mlartifacts/
 mlruns/
+# Generated release artifacts
+release/
