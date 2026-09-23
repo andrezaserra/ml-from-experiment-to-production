@@ -1,135 +1,295 @@
-# Do experimento à produção — v3
+# Do experimento à produção — v4
 
-Quarto estágio do projeto demonstrativo do minicurso.
+Quinto e último estágio implementado do projeto demonstrativo do minicurso.
 
 ## Cenário
 
-Nas versões anteriores, o projeto evoluiu de um experimento em notebook para um projeto Python estruturado, testável e com gerenciamento de experimentos e modelos por meio do MLflow.
+Na `v3-api`, o modelo selecionado no MLflow Model Registry passou a ser consumido por uma API FastAPI.
 
-Na `v2-mlflow-registry`, já conseguimos responder:
-
-> **“Qual modelo deve ser utilizado pela aplicação?”**
-
-O Model Registry passou a disponibilizar o modelo:
-
-```text
-satellite-anomaly-classifier@champion
-```
-
-Mas ainda restava uma pergunta:
-
-> **“Como outro sistema consegue utilizar esse modelo?”**
-
-Na `v3-api`, o modelo passa a ser exposto por meio de uma API HTTP construída com FastAPI.
-
-## Estrutura
-
-```text
-ml-from-experiment-to-production/
-├── data/
-│   └── telemetry.csv
-├── models/
-│   ├── metrics.json
-│   └── model.pkl
-├── notebooks/
-│   └── 00_experiment.ipynb
-├── src/
-│   └── satellite_ml/
-│       ├── __init__.py
-│       ├── api.py
-│       ├── config.py
-│       ├── data.py
-│       ├── evaluate.py
-│       ├── inference.py
-│       ├── register.py
-│       ├── schemas.py
-│       ├── tracking.py
-│       └── train.py
-├── tests/
-│   ├── test_api.py
-│   ├── test_data.py
-│   └── test_inference.py
-├── environment.txt
-├── pyproject.toml
-├── requirements.lock.txt
-├── requirements.txt
-└── README.md
-```
-
-## O que mudou em relação à v2?
-
-Na `v2`, o modelo selecionado podia ser carregado diretamente pelo código Python:
-
-```text
-models:/satellite-anomaly-classifier@champion
-```
-
-Na `v3`, adicionamos uma camada de aplicação:
+A aplicação já podia receber telemetria por HTTP e devolver uma predição:
 
 ```text
 Cliente
    │
-   │ HTTP + JSON
    ▼
 FastAPI
    │
-   ├── validação com Pydantic
-   ├── GET /health
-   └── POST /predict
-            │
-            ▼
-      predict_one()
-            │
-            ▼
-      MLflow Registry
-            │
-            ▼
-         @champion
+   ▼
+Modelo
 ```
 
-O cliente não precisa conhecer MLflow, scikit-learn ou a implementação interna do modelo.
+Mas ela ainda dependia diretamente do ambiente local:
 
-## Contrato da API
+- versão do Python;
+- bibliotecas instaladas;
+- sistema operacional;
+- configuração do processo;
+- disponibilidade do modelo.
 
-Os contratos de entrada e saída ficam definidos em:
+A pergunta da `v4-docker` é:
+
+> **“Como empacotar aplicação, runtime, dependências e uma versão conhecida do modelo em um artefato portátil?”**
+
+A resposta desta versão é Docker.
+
+## Evolução completa
 
 ```text
-src/satellite_ml/schemas.py
+v0 — experimento
+Notebook
+    ↓
+“O modelo funciona?”
+
+v1 — engenharia
+Projeto Python + testes
+    ↓
+“Consigo manter e reproduzir?”
+
+v2 — MLOps
+MLflow Tracking + Model Registry
+    ↓
+“Consigo rastrear e gerenciar meus modelos?”
+
+v3 — serviço
+FastAPI + Pydantic
+    ↓
+“Outro sistema consegue consumir o modelo?”
+
+v4 — empacotamento
+Docker
+    ↓
+“Consigo levar a aplicação para outro ambiente?”
 ```
 
-A entrada de uma predição segue o schema `TelemetryRequest`:
+## Arquitetura da release
+
+O alias `champion` é utilizado para selecionar o modelo que deve entrar na release.
+
+Antes do build, o alias é resolvido para uma versão concreta:
+
+```text
+MLflow Model Registry
+        │
+        ▼
+     @champion
+        │
+        ▼
+     Version 1
+        │
+        ▼
+      release/
+      ├── model/
+      └── model-manifest.json
+```
+
+A imagem Docker recebe essa versão específica do modelo.
+
+```text
+┌─────────────────────────────────────┐
+│ satellite-anomaly-api:v1            │
+│                                     │
+│ Python 3.12                         │
+│ FastAPI + Uvicorn                   │
+│ MLflow                              │
+│ scikit-learn + skops                │
+│ satellite_ml                        │
+│                                     │
+│ release/                            │
+│ ├── model/                          │
+│ │   └── Model Version 1             │
+│ └── model-manifest.json             │
+└─────────────────────────────────────┘
+```
+
+## Por que resolver o alias antes do build?
+
+O alias:
+
+```text
+champion
+```
+
+pode ser alterado no Model Registry.
+
+Já uma versão:
+
+```text
+Version 1
+```
+
+é uma referência concreta.
+
+Por isso, o processo de release segue:
+
+```text
+champion
+    ↓
+resolve alias
+    ↓
+Version 1
+    ↓
+exporta versão
+    ↓
+docker build
+```
+
+Assim, uma mesma imagem Docker não muda de modelo apenas porque o alias do Registry foi atualizado posteriormente.
+
+## Gerando a release
+
+O módulo:
+
+```text
+src/satellite_ml/export_model.py
+```
+
+resolve o alias `champion`, identifica a versão correspondente e exporta os artefatos para:
+
+```text
+release/model/
+```
+
+Também é criado:
+
+```text
+release/model-manifest.json
+```
+
+Exemplo:
 
 ```json
 {
-  "battery_voltage": 28.1,
-  "battery_current": 1.7,
-  "battery_temperature": 24.8,
-  "solar_panel_current": 4.9,
-  "bus_voltage": 28.0,
-  "attitude_error": 0.02,
-  "eclipse": 0
+  "model_name": "satellite-anomaly-classifier",
+  "source_alias": "champion",
+  "model_version": "1",
+  "source_run_id": "fd26fd166edb4015bbcee44c186f537b",
+  "model_uri": "models:/satellite-anomaly-classifier/1"
 }
 ```
 
-O Pydantic valida automaticamente o formato recebido.
+Para gerar a release:
 
-Por exemplo, o campo:
-
-```text
-eclipse
+```bash
+python -m satellite_ml.export_model
 ```
 
-aceita apenas valores entre `0` e `1`.
+O MLflow Tracking Server precisa estar disponível durante essa etapa, pois é nele que o alias é resolvido e o modelo é obtido.
 
-Campos desconhecidos também são rejeitados.
+## Git e artefatos de release
 
-## Endpoints
+O diretório:
 
-### `GET /health`
+```text
+release/
+```
 
-Verifica se a aplicação iniciou corretamente e se o modelo foi carregado.
+é gerado automaticamente e não é versionado no Git.
 
-Exemplo de resposta:
+```text
+.gitignore
+    ↓
+release/ não é versionado
+```
+
+Entretanto, ele faz parte do contexto de build do Docker:
+
+```text
+.dockerignore
+    ↓
+release/ não é ignorado
+```
+
+Assim, o código do processo é versionado, enquanto o artefato de release é reconstruído a partir do Model Registry.
+
+## Dependências de runtime
+
+A imagem usa:
+
+```text
+requirements-runtime.txt
+```
+
+Esse arquivo contém apenas as dependências necessárias para executar a aplicação e carregar o modelo.
+
+Ele é diferente do ambiente completo de desenvolvimento:
+
+```text
+requirements.lock.txt
+    ↓
+ambiente utilizado para desenvolvimento
+
+requirements-runtime.txt
+    ↓
+ambiente necessário para executar o serviço
+```
+
+## Dockerfile
+
+O `Dockerfile` empacota:
+
+```text
+Python
++ dependências
++ código da aplicação
++ API FastAPI
++ Model Version 1
+```
+
+A API é iniciada pelo Uvicorn dentro do container:
+
+```text
+0.0.0.0:8000
+```
+
+O container também possui um health check baseado no endpoint:
+
+```text
+GET /health
+```
+
+## Construindo a imagem
+
+Primeiro, gere a release:
+
+```bash
+python -m satellite_ml.export_model
+```
+
+Depois:
+
+```bash
+docker build   -t satellite-anomaly-api:v1   .
+```
+
+Confira:
+
+```bash
+docker images satellite-anomaly-api
+```
+
+## Executando
+
+Neste ambiente demonstrativo, a porta `8000` do host já estava ocupada por outro serviço.
+
+Por isso, utilizamos:
+
+```text
+host 8001 → container 8000
+```
+
+Execute:
+
+```bash
+docker run --rm   --name satellite-anomaly-api   -p 8001:8000   satellite-anomaly-api:v1
+```
+
+## Health check
+
+```bash
+curl http://127.0.0.1:8001/health
+```
+
+Resposta esperada:
 
 ```json
 {
@@ -138,89 +298,22 @@ Exemplo de resposta:
 }
 ```
 
-### `POST /predict`
+O próprio Docker também verifica o estado do serviço.
 
-Recebe uma amostra de telemetria e executa a inferência.
-
-Exemplo de resposta:
-
-```json
-{
-  "anomaly": false,
-  "prediction": 0,
-  "model": "satellite-anomaly-classifier",
-  "alias": "champion"
-}
+```bash
+docker ps
 ```
 
-## Carregamento do modelo
-
-O modelo é carregado uma única vez durante a inicialização da aplicação.
+O container deve aparecer como:
 
 ```text
-API inicia
-   │
-   ▼
-carrega @champion
-   │
-   ▼
-aguarda requisições
+healthy
 ```
 
-Isso evita buscar e carregar novamente o modelo a cada chamada ao endpoint `/predict`.
-
-A URI utilizada é:
-
-```text
-models:/satellite-anomaly-classifier@champion
-```
-
-## Executando localmente
-
-Ative o ambiente virtual:
+## Predição
 
 ```bash
-source .venv/bin/activate
-```
-
-O MLflow Tracking Server precisa estar disponível:
-
-```bash
-mlflow server
-```
-
-Por padrão:
-
-```text
-http://127.0.0.1:5000
-```
-
-Em outro terminal, inicie a API:
-
-```bash
-python -m uvicorn satellite_ml.api:app \
-  --host 127.0.0.1 \
-  --port 8001 \
-  --reload
-```
-
-Neste ambiente demonstrativo usamos a porta `8001` para evitar conflito com outros serviços locais.
-
-## Testando a API
-
-Health check:
-
-```bash
-curl http://127.0.0.1:8001/health
-```
-
-Predição:
-
-```bash
-curl -X POST \
-  http://127.0.0.1:8001/predict \
-  -H "Content-Type: application/json" \
-  -d '{
+curl -X POST   http://127.0.0.1:8001/predict   -H "Content-Type: application/json"   -d '{
     "battery_voltage": 28.1,
     "battery_current": 1.7,
     "battery_temperature": 24.8,
@@ -231,46 +324,50 @@ curl -X POST \
   }'
 ```
 
-## Documentação automática
+Exemplo de resposta:
 
-O FastAPI gera automaticamente uma interface interativa baseada no contrato da aplicação:
-
-```text
-http://127.0.0.1:8001/docs
+```json
+{
+  "anomaly": false,
+  "prediction": 0,
+  "model": "satellite-anomaly-classifier",
+  "version": "1",
+  "source_alias": "champion"
+}
 ```
 
-Nela é possível visualizar e executar:
+## Runtime independente do Registry
+
+O MLflow Model Registry participa da criação da release:
 
 ```text
-GET  /health
-POST /predict
+Tracking
+   ↓
+Registry
+   ↓
+champion
+   ↓
+Version 1
+   ↓
+release
 ```
 
-## Testes automatizados
-
-Os testes da API ficam em:
+Depois do build, o container utiliza o modelo incluído na própria imagem:
 
 ```text
-tests/test_api.py
+Docker container
+   │
+   ├── FastAPI
+   ├── código
+   ├── dependências
+   └── Model Version 1
 ```
 
-Eles validam:
+A aplicação não precisa consultar o Registry para cada predição.
 
-- health check;
-- predição com payload válido;
-- rejeição de payload inválido.
+## Testes
 
-Para manter os testes independentes da infraestrutura, o MLflow Registry real é substituído por um modelo simples durante os testes.
-
-```text
-execução real
-FastAPI → MLflow Registry → @champion
-
-testes
-FastAPI → DummyModel
-```
-
-Execute:
+Os testes das versões anteriores continuam disponíveis:
 
 ```bash
 pytest -q
@@ -282,39 +379,66 @@ Nesta versão:
 6 passed
 ```
 
-## API não é o modelo
+Eles verificam:
 
-A API representa uma nova responsabilidade no sistema.
+- carregamento e separação dos dados;
+- inferência;
+- health check da API;
+- predição via API;
+- validação de payload.
+
+## O que construímos
+
+Ao final da parte prática, o projeto passou por toda esta evolução:
 
 ```text
-Modelo
-    ↓
-faz inferência
-
-API
-    ↓
-define como outros sistemas acessam essa inferência
+Notebook
+   ↓
+Projeto Python estruturado
+   ↓
+Testes
+   ↓
+Experiment Tracking
+   ↓
+Model Registry
+   ↓
+FastAPI
+   ↓
+Docker
 ```
 
-Isso permite separar o código de Machine Learning do contrato utilizado pelos consumidores da aplicação.
+O resultado é uma aplicação de Machine Learning:
 
-## Por que esta versão ainda é incompleta?
+- versionada;
+- testável;
+- com experimentos rastreáveis;
+- com modelo promovido de forma explícita;
+- acessível por API;
+- empacotada em uma imagem Docker;
+- com uma versão conhecida do modelo;
+- portátil entre ambientes compatíveis com containers.
 
-Agora outro sistema consegue consumir o modelo por HTTP.
+> **Neste ponto, o artefato está pronto para deploy.**
 
-Mas a aplicação ainda depende diretamente do ambiente em que foi configurada:
+## O que ainda falta para produção?
 
-- Python;
-- bibliotecas instaladas;
-- versões das dependências;
-- sistema operacional;
-- configuração do processo;
-- acesso ao MLflow.
+Estar pronto para deploy não significa que todos os requisitos de produção estejam resolvidos.
 
-Surge então uma nova pergunta:
+Uma arquitetura real pode precisar ainda de:
 
-> **“Como empacotar essa aplicação e suas dependências para executá-la de forma consistente em outro ambiente?”**
+- infraestrutura de cloud;
+- banco de dados e armazenamento de objetos;
+- Data Lake ou Data Warehouse;
+- orquestração de pipelines;
+- CI/CD;
+- autenticação e gerenciamento de segredos;
+- observabilidade;
+- escalabilidade;
+- alta disponibilidade;
+- monitoramento de dados e modelos.
 
-Na próxima versão, essa pergunta será respondida com **Docker**.
+Esses componentes não são implementados neste repositório.
 
-O objetivo da `v4-docker` será transformar a aplicação em um artefato portátil e pronto para deploy.
+A partir daqui, o minicurso deixa de **construir** e passa a **arquitetar**:
+
+> **Até aqui: construímos. Daqui em diante: arquitetamos.**

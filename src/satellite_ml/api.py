@@ -1,8 +1,11 @@
 from contextlib import asynccontextmanager
+import json
 import os
+from pathlib import Path
 
 import mlflow
 from fastapi import FastAPI, HTTPException, Request
+from mlflow import MlflowClient
 
 from satellite_ml.inference import predict_one
 from satellite_ml.schemas import (
@@ -16,28 +19,87 @@ DEFAULT_TRACKING_URI = "http://127.0.0.1:5000"
 
 MODEL_NAME = "satellite-anomaly-classifier"
 MODEL_ALIAS = "champion"
-MODEL_URI = f"models:/{MODEL_NAME}@{MODEL_ALIAS}"
+DEFAULT_MODEL_URI = f"models:/{MODEL_NAME}@{MODEL_ALIAS}"
+
+
+def resolve_model_metadata(model_uri: str) -> dict:
+    """Resolve metadata for the model loaded by the API."""
+    manifest_path = os.getenv("MODEL_MANIFEST_PATH")
+
+    if manifest_path:
+        path = Path(manifest_path)
+
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Model manifest not found: {path}"
+            )
+
+        return json.loads(
+            path.read_text(encoding="utf-8")
+        )
+
+    if model_uri == DEFAULT_MODEL_URI:
+        client = MlflowClient()
+
+        model_version = client.get_model_version_by_alias(
+            name=MODEL_NAME,
+            alias=MODEL_ALIAS,
+        )
+
+        return {
+            "model_name": MODEL_NAME,
+            "source_alias": MODEL_ALIAS,
+            "model_version": str(model_version.version),
+            "source_run_id": model_version.run_id,
+            "model_uri": model_uri,
+        }
+
+    return {
+        "model_name": MODEL_NAME,
+        "source_alias": None,
+        "model_version": "unknown",
+        "source_run_id": None,
+        "model_uri": model_uri,
+    }
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load the champion model once when the API starts."""
+    """Load the prediction model once when the API starts."""
     tracking_uri = os.getenv(
         "MLFLOW_TRACKING_URI",
         DEFAULT_TRACKING_URI,
+    )
+
+    model_uri = os.getenv(
+        "MODEL_URI",
+        DEFAULT_MODEL_URI,
     )
 
     mlflow.set_tracking_uri(tracking_uri)
 
     try:
         app.state.model = mlflow.sklearn.load_model(
-            MODEL_URI
+            model_uri
         )
+
+        metadata = resolve_model_metadata(
+            model_uri
+        )
+
+        app.state.model_name = metadata["model_name"]
+        app.state.model_version = metadata["model_version"]
+        app.state.source_alias = metadata.get(
+            "source_alias"
+        )
+
         app.state.model_loaded = True
         app.state.model_load_error = None
 
+        print(f"Model loaded from: {model_uri}")
         print(
-            f"Model loaded: {MODEL_NAME}@{MODEL_ALIAS}"
+            "Model version: "
+            f"{app.state.model_version}"
         )
 
     except Exception as exc:
@@ -45,9 +107,7 @@ async def lifespan(app: FastAPI):
         app.state.model_loaded = False
         app.state.model_load_error = str(exc)
 
-        print(
-            f"Could not load model: {exc}"
-        )
+        print(f"Could not load model: {exc}")
 
     yield
 
@@ -100,6 +160,7 @@ def predict(
     return PredictionResponse(
         anomaly=bool(prediction),
         prediction=int(prediction),
-        model=MODEL_NAME,
-        alias=MODEL_ALIAS,
+        model=request.app.state.model_name,
+        version=request.app.state.model_version,
+        source_alias=request.app.state.source_alias,
     )

@@ -1,15 +1,16 @@
-Reference environment for v3-api
+Reference environment for v4-docker
 
 Python: Python 3.12.3
 Platform: WSL2 / Linux
 
 Main packages:
 fastapi:      0.141.1
+httpx2:       2.13.0
 pydantic:     2.13.5
 uvicorn:      0.53.0
-httpx:        0.28.1
 mlflow:       3.16.1
 scikit-learn: 1.9.1
+skops:        0.15.0
 pandas:       3.0.6
 numpy:        2.5.3
 joblib:       1.6.0
