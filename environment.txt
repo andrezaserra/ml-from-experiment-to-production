@@ -1,9 +1,10 @@
-Reference environment for v1-engineering
+Reference environment for v2-mlflow
 
 Python: Python 3.12.3
 Platform: WSL2 / Linux
 
 Main packages:
+mlflow:       3.16.1
 scikit-learn: 1.9.1
 pandas:       3.0.6
 numpy:        2.5.3
