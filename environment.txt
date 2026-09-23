@@ -1,9 +1,13 @@
-Reference environment for v2-mlflow
+Reference environment for v3-api
 
 Python: Python 3.12.3
 Platform: WSL2 / Linux
 
 Main packages:
+fastapi:      0.141.1
+pydantic:     2.13.5
+uvicorn:      0.53.0
+httpx:        0.28.1
 mlflow:       3.16.1
 scikit-learn: 1.9.1
 pandas:       3.0.6

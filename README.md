@@ -1,24 +1,26 @@
-# Do experimento à produção — v2
+# Do experimento à produção — v3
 
-Terceiro estágio do projeto demonstrativo do minicurso.
+Quarto estágio do projeto demonstrativo do minicurso.
 
 ## Cenário
 
-O projeto usa uma telemetria **100% sintética** para demonstrar um problema simples de classificação de anomalias. Nenhum valor deve ser interpretado como limite operacional de um satélite real.
+Nas versões anteriores, o projeto evoluiu de um experimento em notebook para um projeto Python estruturado, testável e com gerenciamento de experimentos e modelos por meio do MLflow.
 
-Na `v1-engineering`, o experimento foi reorganizado como um pequeno projeto Python, com módulos reutilizáveis, testes e ambiente de execução mais explícito.
+Na `v2-mlflow-registry`, já conseguimos responder:
 
-A pergunta daquela versão era:
+> **“Qual modelo deve ser utilizado pela aplicação?”**
 
-> **“Consigo organizar, reutilizar, testar e reproduzir melhor esse projeto?”**
+O Model Registry passou a disponibilizar o modelo:
 
-Na `v2-mlflow`, surge um novo problema:
+```text
+satellite-anomaly-classifier@champion
+```
 
-> **“Como rastrear sistematicamente cada treinamento, seus parâmetros, métricas, artefatos e modelos?”**
+Mas ainda restava uma pergunta:
 
-E, depois de acumular vários experimentos:
+> **“Como outro sistema consegue utilizar esse modelo?”**
 
-> **“Qual desses modelos deve entrar no ciclo de vida gerenciado da aplicação?”**
+Na `v3-api`, o modelo passa a ser exposto por meio de uma API HTTP construída com FastAPI.
 
 ## Estrutura
 
@@ -34,14 +36,17 @@ ml-from-experiment-to-production/
 ├── src/
 │   └── satellite_ml/
 │       ├── __init__.py
+│       ├── api.py
 │       ├── config.py
 │       ├── data.py
 │       ├── evaluate.py
 │       ├── inference.py
 │       ├── register.py
+│       ├── schemas.py
 │       ├── tracking.py
 │       └── train.py
 ├── tests/
+│   ├── test_api.py
 │   ├── test_data.py
 │   └── test_inference.py
 ├── environment.txt
@@ -51,122 +56,126 @@ ml-from-experiment-to-production/
 └── README.md
 ```
 
-Os arquivos locais do MLflow, como `mlflow.db` e `mlartifacts/`, não são versionados no Git.
+## O que mudou em relação à v2?
 
-## O que mudou em relação à v1?
-
-Na `v1`, cada treinamento produzia arquivos locais:
+Na `v2`, o modelo selecionado podia ser carregado diretamente pelo código Python:
 
 ```text
-treinamento
-    ↓
-model.pkl
-metrics.json
+models:/satellite-anomaly-classifier@champion
 ```
 
-Isso funciona, mas não preserva de forma estruturada o contexto de cada execução.
-
-Na `v2`, cada treinamento cria um **run** no MLflow:
+Na `v3`, adicionamos uma camada de aplicação:
 
 ```text
-treinamento
-    ↓
-MLflow Run
-    ├── parâmetros
-    ├── métricas
-    ├── tags
-    ├── artefatos
-    └── modelo
+Cliente
+   │
+   │ HTTP + JSON
+   ▼
+FastAPI
+   │
+   ├── validação com Pydantic
+   ├── GET /health
+   └── POST /predict
+            │
+            ▼
+      predict_one()
+            │
+            ▼
+      MLflow Registry
+            │
+            ▼
+         @champion
 ```
 
-Cada execução passa a ter identidade própria e pode ser consultada posteriormente.
+O cliente não precisa conhecer MLflow, scikit-learn ou a implementação interna do modelo.
 
-## Experiment Tracking
+## Contrato da API
 
-### Experiment
-
-Agrupa diferentes execuções relacionadas ao mesmo problema.
-
-Neste projeto:
+Os contratos de entrada e saída ficam definidos em:
 
 ```text
-satellite-anomaly-detection
+src/satellite_ml/schemas.py
 ```
 
-### Run
+A entrada de uma predição segue o schema `TelemetryRequest`:
 
-Representa uma execução individual do treinamento.
+```json
+{
+  "battery_voltage": 28.1,
+  "battery_current": 1.7,
+  "battery_temperature": 24.8,
+  "solar_panel_current": 4.9,
+  "bus_voltage": 28.0,
+  "attitude_error": 0.02,
+  "eclipse": 0
+}
+```
 
-Exemplos:
+O Pydantic valida automaticamente o formato recebido.
+
+Por exemplo, o campo:
 
 ```text
-rf-small
-rf-baseline
-rf-large
-validation-v2
+eclipse
 ```
 
-### Parameters
+aceita apenas valores entre `0` e `1`.
 
-Descrevem como o modelo foi configurado antes do treinamento.
+Campos desconhecidos também são rejeitados.
 
-Exemplos:
+## Endpoints
+
+### `GET /health`
+
+Verifica se a aplicação iniciou corretamente e se o modelo foi carregado.
+
+Exemplo de resposta:
+
+```json
+{
+  "status": "ok",
+  "model_loaded": true
+}
+```
+
+### `POST /predict`
+
+Recebe uma amostra de telemetria e executa a inferência.
+
+Exemplo de resposta:
+
+```json
+{
+  "anomaly": false,
+  "prediction": 0,
+  "model": "satellite-anomaly-classifier",
+  "alias": "champion"
+}
+```
+
+## Carregamento do modelo
+
+O modelo é carregado uma única vez durante a inicialização da aplicação.
 
 ```text
-n_estimators
-max_depth
-class_weight
-random_state
+API inicia
+   │
+   ▼
+carrega @champion
+   │
+   ▼
+aguarda requisições
 ```
 
-### Metrics
+Isso evita buscar e carregar novamente o modelo a cada chamada ao endpoint `/predict`.
 
-Representam os resultados medidos após o treinamento.
-
-Neste projeto:
+A URI utilizada é:
 
 ```text
-f1
-precision
-recall
+models:/satellite-anomaly-classifier@champion
 ```
 
-### Artifacts
-
-São arquivos ou objetos produzidos por uma execução.
-
-Exemplos:
-
-```text
-metrics.json
-modelo treinado
-assinatura do modelo
-exemplo de entrada
-```
-
-## Tracking
-
-A configuração do MLflow foi separada em:
-
-```text
-src/satellite_ml/tracking.py
-```
-
-Esse módulo define onde o tracking é realizado e qual experimento será utilizado.
-
-Por padrão, o projeto espera um MLflow Tracking Server em:
-
-```text
-http://127.0.0.1:5000
-```
-
-A URI pode ser alterada por meio da variável de ambiente:
-
-```bash
-export MLFLOW_TRACKING_URI=http://outro-servidor:5000
-```
-
-## Executando o MLflow
+## Executando localmente
 
 Ative o ambiente virtual:
 
@@ -174,288 +183,138 @@ Ative o ambiente virtual:
 source .venv/bin/activate
 ```
 
-Inicie o servidor:
+O MLflow Tracking Server precisa estar disponível:
 
 ```bash
 mlflow server
 ```
 
-A interface estará disponível em:
+Por padrão:
 
 ```text
 http://127.0.0.1:5000
 ```
 
-## Executando experimentos
-
-Um treinamento com os parâmetros padrão:
+Em outro terminal, inicie a API:
 
 ```bash
-python -m satellite_ml.train \
-  --run-name baseline-v2
+python -m uvicorn satellite_ml.api:app \
+  --host 127.0.0.1 \
+  --port 8001 \
+  --reload
 ```
 
-Um modelo menor:
+Neste ambiente demonstrativo usamos a porta `8001` para evitar conflito com outros serviços locais.
+
+## Testando a API
+
+Health check:
 
 ```bash
-python -m satellite_ml.train \
-  --n-estimators 100 \
-  --max-depth 6 \
-  --run-name rf-small
+curl http://127.0.0.1:8001/health
 ```
 
-Um modelo intermediário:
+Predição:
 
 ```bash
-python -m satellite_ml.train \
-  --n-estimators 200 \
-  --max-depth 10 \
-  --run-name rf-baseline
+curl -X POST \
+  http://127.0.0.1:8001/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "battery_voltage": 28.1,
+    "battery_current": 1.7,
+    "battery_temperature": 24.8,
+    "solar_panel_current": 4.9,
+    "bus_voltage": 28.0,
+    "attitude_error": 0.02,
+    "eclipse": 0
+  }'
 ```
 
-Um modelo maior:
+## Documentação automática
+
+O FastAPI gera automaticamente uma interface interativa baseada no contrato da aplicação:
+
+```text
+http://127.0.0.1:8001/docs
+```
+
+Nela é possível visualizar e executar:
+
+```text
+GET  /health
+POST /predict
+```
+
+## Testes automatizados
+
+Os testes da API ficam em:
+
+```text
+tests/test_api.py
+```
+
+Eles validam:
+
+- health check;
+- predição com payload válido;
+- rejeição de payload inválido.
+
+Para manter os testes independentes da infraestrutura, o MLflow Registry real é substituído por um modelo simples durante os testes.
+
+```text
+execução real
+FastAPI → MLflow Registry → @champion
+
+testes
+FastAPI → DummyModel
+```
+
+Execute:
 
 ```bash
-python -m satellite_ml.train \
-  --n-estimators 300 \
-  --max-depth 14 \
-  --run-name rf-large
+pytest -q
 ```
 
-Cada comando gera um novo run no experimento `satellite-anomaly-detection`.
-
-## Resultado de referência
-
-Um exemplo de execução da `v2`:
+Nesta versão:
 
 ```text
-Run:        validation-v2
-F1:         0.9382
-Precision:  0.9773
-Recall:     0.9021
+6 passed
 ```
 
-Os valores podem variar de acordo com os hiperparâmetros utilizados.
+## API não é o modelo
 
-O objetivo não é escolher automaticamente o melhor modelo, mas demonstrar como o MLflow permite comparar diferentes execuções de forma estruturada.
-
-## Um run também pode falhar
-
-Durante o desenvolvimento da `v2`, uma primeira tentativa de registrar o modelo falhou durante a serialização.
-
-Esse run permaneceu registrado no MLflow com status de falha.
-
-Isso ilustra uma característica importante:
-
-> **Experiment tracking registra o processo experimental, e não apenas os resultados bem-sucedidos.**
-
-Runs com falha também ajudam a preservar o histórico do desenvolvimento.
-
-## Model Registry
-
-Depois que vários experimentos foram registrados, surge uma nova necessidade:
-
-> **Nem todo modelo treinado deve automaticamente ser utilizado pela aplicação.**
-
-Por isso, a `v2` também introduz o **MLflow Model Registry**.
-
-O fluxo passa a ser:
+A API representa uma nova responsabilidade no sistema.
 
 ```text
-Experiment Tracking
-        ↓
-vários runs
-        ↓
-modelo selecionado
-        ↓
-Logged Model
-        ↓
-Model Registry
-        ↓
-Registered Model
-        ↓
-Model Version
-        ↓
-alias
-```
-
-Neste projeto, o modelo registrado recebe o nome:
-
-```text
-satellite-anomaly-classifier
-```
-
-## Registrando um modelo
-
-O módulo:
-
-```text
-src/satellite_ml/register.py
-```
-
-é responsável por promover um modelo produzido por um run para o Model Registry.
-
-Exemplo:
-
-```bash
-python -m satellite_ml.register \
-  --run-id SEU_RUN_ID
-```
-
-O script encontra o **Logged Model** produzido pelo run e cria uma nova versão no Registry.
-
-Exemplo conceitual:
-
-```text
-rf-baseline
+Modelo
     ↓
-Logged Model
+faz inferência
+
+API
     ↓
-satellite-anomaly-classifier
-    ↓
-Version 1
+define como outros sistemas acessam essa inferência
 ```
 
-## Alias `champion`
-
-A versão registrada recebe o alias:
-
-```text
-champion
-```
-
-Assim, uma aplicação não precisa saber qual número de versão deve carregar.
-
-Em vez de:
-
-```text
-Version 1
-Version 2
-Version 7
-```
-
-ela pode referenciar:
-
-```text
-models:/satellite-anomaly-classifier@champion
-```
-
-O Registry resolve qual versão corresponde ao alias.
-
-## Carregando o modelo registrado
-
-Exemplo:
-
-```python
-import mlflow
-
-mlflow.set_tracking_uri(
-    "http://127.0.0.1:5000"
-)
-
-model = mlflow.sklearn.load_model(
-    "models:/satellite-anomaly-classifier@champion"
-)
-```
-
-Neste projeto, esse carregamento foi validado com sucesso utilizando um `RandomForestClassifier`.
-
-## Tracking não é Registry
-
-Esses dois conceitos resolvem problemas diferentes.
-
-```text
-Experiment Tracking
-    ↓
-“O que aconteceu nos meus experimentos?”
-
-Model Registry
-    ↓
-“Quais modelos entraram no ciclo de vida gerenciado?”
-```
-
-Nem todo run precisa gerar uma versão registrada.
-
-## Registry não é deployment
-
-Registrar um modelo também não significa colocá-lo automaticamente em produção.
-
-```text
-Training
-    ↓
-gera um modelo
-
-Tracking
-    ↓
-registra o experimento
-
-Registry
-    ↓
-gerencia versões e aliases
-
-Deployment / Serving
-    ↓
-expõe o modelo para uso
-```
-
-Essa separação será importante na próxima etapa.
-
-## Modelo local de referência
-
-O arquivo:
-
-```text
-models/model.pkl
-```
-
-continua representando o modelo local de referência da `v1`.
-
-Os novos treinamentos experimentais da `v2` são registrados no MLflow e não sobrescrevem automaticamente esse artefato.
-
-Isso reforça a ideia de que:
-
-> **Treinar um novo modelo não significa automaticamente promover esse modelo para uso pela aplicação.**
-
-## Testes
-
-Os testes introduzidos na `v1` continuam válidos:
-
-```bash
-pytest -v
-```
-
-Atualmente são verificados:
-
-- presença das colunas esperadas no dataset;
-- criação dos conjuntos de treino e teste;
-- retorno válido da função de inferência.
-
-## Reprodutibilidade
-
-A `v2` atualiza também o ambiente de referência.
-
-O `pyproject.toml` passa a incluir o MLflow como dependência do projeto.
-
-O `requirements.lock.txt` registra as versões exatas instaladas no ambiente utilizado para esta etapa.
-
-O `environment.txt` registra as principais versões, incluindo o MLflow.
+Isso permite separar o código de Machine Learning do contrato utilizado pelos consumidores da aplicação.
 
 ## Por que esta versão ainda é incompleta?
 
-Agora conseguimos:
+Agora outro sistema consegue consumir o modelo por HTTP.
 
-- rastrear experimentos;
-- comparar parâmetros e métricas;
-- preservar artefatos e modelos;
-- registrar modelos selecionados;
-- gerenciar versões;
-- utilizar aliases como `champion`.
+Mas a aplicação ainda depende diretamente do ambiente em que foi configurada:
 
-Mas ainda existem novas perguntas:
+- Python;
+- bibliotecas instaladas;
+- versões das dependências;
+- sistema operacional;
+- configuração do processo;
+- acesso ao MLflow.
 
-1. Como outro sistema pode enviar dados e obter uma predição?
-2. Como expor a inferência por uma interface padronizada?
-3. Como validar os dados recebidos antes de enviá-los ao modelo?
-4. Como fazer uma aplicação consumir o modelo definido como `champion` no Registry?
+Surge então uma nova pergunta:
 
-Na próxima versão, essas perguntas motivarão a criação de uma **API com FastAPI**.
+> **“Como empacotar essa aplicação e suas dependências para executá-la de forma consistente em outro ambiente?”**
+
+Na próxima versão, essa pergunta será respondida com **Docker**.
+
+O objetivo da `v4-docker` será transformar a aplicação em um artefato portátil e pronto para deploy.
